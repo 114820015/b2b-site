@@ -1,128 +1,658 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Core Business | 專業 B2B 企業解決方案</title>
-    <!-- 引入 Tailwind CSS -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D 聖誕節大冒險</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 引入 Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, query, onSnapshot, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Configuration
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'christmas-dash-v1';
+
+        window.gameDB = db;
+        window.gameAppId = appId;
+
+        // 身份驗證處理
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth failed", error);
+            }
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            window.currentUser = user;
+            if (user) {
+                fetchLeaderboard();
+            }
+        });
+
+        initAuth();
+
+        // 排行榜功能
+        async function fetchLeaderboard() {
+            if (!window.currentUser) return;
+            const lbRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+            onSnapshot(lbRef, (snapshot) => {
+                const scores = [];
+                snapshot.forEach(doc => scores.push(doc.data()));
+                scores.sort((a, b) => b.score - a.score);
+                window.leaderboardData = scores.slice(0, 5);
+                renderLeaderboardUI();
+            }, (error) => console.error("LB error", error));
+        }
+
+        // 自動提交分數邏輯
+        window.submitScore = async function(customName = null) {
+            const nameInput = document.getElementById('player-name');
+            let name = (customName || nameInput.value).trim();
+            if (!name) name = "極速賽車手";
+            
+            const score = window.currentFinalScore;
+            if (!window.currentUser || window.hasSubmitted) return;
+            
+            window.hasSubmitted = true; 
+            try {
+                const lbRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+                await addDoc(lbRef, {
+                    name: name,
+                    score: score,
+                    timestamp: Date.now(),
+                    uid: window.currentUser.uid
+                });
+                const area = document.getElementById('score-submit-area');
+                if (area) area.innerHTML = `<p class="text-green-400 font-bold">分數已記錄：${name}</p>`;
+            } catch (e) {
+                console.error("Submit failed", e);
+                window.hasSubmitted = false;
+            }
+        };
+
+        function renderLeaderboardUI() {
+            const container = document.getElementById('leaderboard-list');
+            if (!container) return;
+            if (!window.leaderboardData || window.leaderboardData.length === 0) {
+                container.innerHTML = '<p class="text-gray-400 italic">暫無排行榜資料</p>';
+                return;
+            }
+            container.innerHTML = window.leaderboardData.map((entry, index) => `
+                <div class="flex justify-between items-center bg-white/5 p-2 rounded mb-1">
+                    <span class="flex items-center gap-2">
+                        <span class="w-6 h-6 flex items-center justify-center bg-red-600 rounded-full text-xs">${index + 1}</span>
+                        <span class="truncate max-w-[120px] font-medium">${entry.name}</span>
+                    </span>
+                    <span class="text-yellow-400 font-bold">${entry.score}</span>
+                </div>
+            `).join('');
+        }
+    </script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .hero-gradient { background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%); }
+        body { margin: 0; overflow: hidden; font-family: 'Arial', sans-serif; background: #87ceeb; touch-action: none; }
+        #ui-left, #ui-right { position: absolute; top: 25px; pointer-events: none; z-index: 10; }
+        #ui-left { left: 25px; }
+        #ui-right { right: 25px; text-align: right; }
+        .stat-text { color: white; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); font-size: 1.8rem; }
+        .low-health { color: #ff4d4d !important; animation: pulse 0.5s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        #start-screen, #game-over { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(5, 11, 26, 0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; z-index: 100; overflow-y: auto; padding: 20px; }
+        #countdown { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 120px; font-weight: bold; color: #fff; text-shadow: 0 0 20px #ff0000; display: none; z-index: 200; }
+        .btn { background: #e63946; color: white; padding: 12px 30px; border-radius: 50px; font-size: 1.2rem; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; }
+        .btn:hover { background: #f1faee; color: #e63946; transform: scale(1.05); }
+        .controls { position: absolute; bottom: 40px; width: 100%; display: flex; justify-content: space-between; padding: 0 40px; pointer-events: none; z-index: 50; }
+        .control-btn { width: 75px; height: 75px; background: rgba(255, 255, 255, 0.2); border: 2px solid rgba(255, 255, 255, 0.4); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: white; pointer-events: auto; user-select: none; }
+        .control-btn.active { background: rgba(230, 57, 70, 0.8); transform: scale(0.9); }
+        input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 12px 15px; border-radius: 12px; outline: none; transition: all 0.3s; width: 100%; text-align: center; }
+        input:focus { border-color: #e63946; background: rgba(255,255,255,0.2); }
     </style>
 </head>
-<body class="bg-white text-slate-900">
+<body>
+    <div id="ui-left"><div id="health-display" class="stat-text">❤️ × 10</div></div>
+    <div id="ui-right">
+        <div class="text-sm text-gray-300 font-bold uppercase tracking-widest">Score</div>
+        <div id="score" class="stat-text">0</div>
+    </div>
 
-    <!-- 頂部資訊欄 -->
-    <div class="bg-slate-900 text-slate-400 py-2 px-6 text-xs flex justify-between items-center">
-        <div class="flex space-x-6">
-            <span class="flex items-center"><i data-lucide="phone" class="w-3 h-3 mr-1"></i> 0800-000-XXX</span>
-            <span class="flex items-center"><i data-lucide="mail" class="w-3 h-3 mr-1"></i> support@business.com</span>
-        </div>
-        <div class="hidden md:flex space-x-4">
-            <a href="#" class="hover:text-white transition-colors">常見問題</a>
-            <span class="flex items-center"><i data-lucide="globe" class="w-3 h-3 mr-1"></i> 繁體中文</span>
+    <!-- 開始畫面 -->
+    <div id="start-screen">
+        <h1 class="text-5xl font-black mb-4 text-red-500 text-center uppercase tracking-tighter">Merry Christmas</h1>
+        <div class="max-w-md w-full text-center bg-white/10 p-6 rounded-3xl backdrop-blur-md">
+            <h2 class="text-xl font-bold mb-4">聖誕賽車極速挑戰</h2>
+            <ul class="text-left space-y-2 mb-6 text-base text-gray-100 border-b border-white/10 pb-4">
+                <li>🎮 **操作**：使用方向鍵或按鈕左右移動</li>
+                <li>🎁 **禮物**：一般 10 分，黃金 50 分</li>
+                <li>❤️ **生命**：共有 10 點血量，吃愛心可恢復</li>
+            </ul>
+            
+            <div class="mb-4">
+                <h3 class="text-sm font-bold text-yellow-500 uppercase mb-2">🏆 全球排行榜 (Top 5)</h3>
+                <div id="leaderboard-list" class="text-sm">載入中...</div>
+            </div>
+
+            <button class="btn w-full" onclick="startCountdown()">啟動引擎</button>
         </div>
     </div>
 
-    <!-- 導覽列 -->
-    <nav class="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-100">
-        <div class="max-w-7xl mx-auto px-6 h-20 flex justify-between items-center">
-            <div class="flex items-center space-x-2">
-                <i data-lucide="building-2" class="w-8 h-8 text-blue-700"></i>
-                <span class="text-xl font-bold tracking-tight text-slate-900">CORE BUSINESS</span>
-            </div>
-            <div class="hidden lg:flex items-center space-x-10 text-sm font-semibold text-slate-600">
-                <a href="#solutions" class="hover:text-blue-700">解決方案</a>
-                <a href="#" class="hover:text-blue-700">產業應用</a>
-                <a href="#" class="hover:text-blue-700">成功案例</a>
-                <button class="bg-blue-700 text-white px-5 py-2.5 rounded-md font-bold hover:bg-blue-800 transition-all">
-                    獲取方案報價
-                </button>
-            </div>
-        </div>
-    </nav>
+    <div class="controls">
+        <div id="btn-left" class="control-btn">⬅️</div>
+        <div id="btn-right" class="control-btn">➡️</div>
+    </div>
 
-    <!-- 英雄區 (Hero) -->
-    <section class="hero-gradient py-20 lg:py-32 overflow-hidden">
-        <div class="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12 items-center">
-            <div>
-                <div class="inline-block px-3 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded mb-6 uppercase tracking-wider">
-                    B2B 企業級專業服務
-                </div>
-                <h1 class="text-4xl lg:text-6xl font-extrabold text-slate-900 leading-tight mb-6">
-                    加速企業營運效率 <br>
-                    <span class="text-blue-700">驅動可持續性的增長</span>
-                </h1>
-                <p class="text-lg text-slate-600 mb-10 max-w-lg leading-relaxed">
-                    我們提供深度的產業洞察與量身定制的技術架構，協助企業優化核心流程。
-                </p>
-                <div class="flex flex-col sm:row gap-4">
-                    <button class="inline-flex items-center justify-center bg-blue-700 text-white px-8 py-4 rounded-md font-bold hover:bg-blue-800 transition-all">
-                        立即與顧問預約 <i data-lucide="arrow-right" class="ml-2 w-5 h-5"></i>
-                    </button>
+    <div id="countdown">3</div>
+
+    <!-- 遊戲結束畫面 -->
+    <div id="game-over" style="display: none;">
+        <div class="max-w-sm w-full bg-white/10 p-8 rounded-3xl backdrop-blur-xl text-center border border-white/20">
+            <h2 class="text-4xl font-extrabold text-red-500 mb-2">任務結束！</h2>
+            <div class="text-6xl font-black text-white mb-6" id="final-score-display">0</div>
+            
+            <div id="score-submit-area" class="mb-8">
+                <p class="text-gray-300 text-sm mb-3">請輸入名稱記錄排行</p>
+                <div class="flex flex-col gap-3">
+                    <input type="text" id="player-name" placeholder="【輸入您的名字】" maxlength="12" 
+                           onkeydown="if(event.key==='Enter') window.submitScore()">
                 </div>
             </div>
-            <div class="hidden lg:block">
-                <div class="bg-white p-8 rounded-2xl shadow-2xl border border-slate-100">
-                    <div class="flex justify-between items-center mb-8">
-                        <h4 class="font-bold text-slate-800 text-lg">營運效能監控</h4>
-                        <span class="text-green-600 text-sm font-bold">+12.5% YoY</span>
-                    </div>
-                    <div class="space-y-6">
-                        <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-blue-600 w-3/4"></div></div>
-                        <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-blue-600 w-1/2"></div></div>
-                        <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-blue-600 w-5/6"></div></div>
-                    </div>
-                    <div class="mt-8 grid grid-cols-3 gap-4 text-center">
-                        <div class="p-4 bg-slate-50 rounded-lg"><div class="text-2xl font-bold">85%</div><div class="text-[10px] text-slate-500 uppercase">自動化</div></div>
-                        <div class="p-4 bg-slate-50 rounded-lg"><div class="text-2xl font-bold">4.2k</div><div class="text-[10px] text-slate-500 uppercase">月用戶</div></div>
-                        <div class="p-4 bg-slate-50 rounded-lg"><div class="text-2xl font-bold">99.9</div><div class="text-[10px] text-slate-500 uppercase">穩定率</div></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
 
-    <!-- 解決方案區塊 -->
-    <section id="solutions" class="py-24 max-w-7xl mx-auto px-6 text-center">
-        <h2 class="text-3xl font-bold mb-16">全方位的企業解決方案</h2>
-        <div class="grid md:grid-cols-3 gap-8">
-            <div class="p-8 rounded-xl border border-slate-100 hover:shadow-xl transition-all text-left">
-                <i data-lucide="bar-chart" class="w-10 h-10 text-blue-700 mb-6"></i>
-                <h4 class="text-xl font-bold mb-4">數位轉型顧問</h4>
-                <p class="text-slate-600 text-sm leading-relaxed">協助企業評估現有架構，規劃最適合的雲端與數位化轉型路徑。</p>
-            </div>
-            <div class="p-8 rounded-xl border border-slate-100 hover:shadow-xl transition-all text-left bg-blue-700 text-white">
-                <i data-lucide="shield-check" class="w-10 h-10 text-blue-300 mb-6"></i>
-                <h4 class="text-xl font-bold mb-4">企業級安全防護</h4>
-                <p class="text-blue-100 text-sm leading-relaxed">針對合規性要求極高的行業，提供全方位的資安稽核與監控。</p>
-            </div>
-            <div class="p-8 rounded-xl border border-slate-100 hover:shadow-xl transition-all text-left">
-                <i data-lucide="users" class="w-10 h-10 text-blue-700 mb-6"></i>
-                <h4 class="text-xl font-bold mb-4">人力資源管理</h4>
-                <p class="text-slate-600 text-sm leading-relaxed">透過智慧化平台，優化企業人才招募與內部績效考核流程。</p>
-            </div>
+            <button onclick="handleRestart()" class="btn w-full">重新挑戰</button>
         </div>
-    </section>
-
-    <!-- 頁尾 -->
-    <footer class="bg-slate-50 border-t border-slate-200 py-12">
-        <div class="max-w-7xl mx-auto px-6 text-center">
-            <div class="flex justify-center items-center space-x-2 mb-6">
-                <i data-lucide="building-2" class="w-6 h-6 text-blue-700"></i>
-                <span class="font-bold">CORE BUSINESS</span>
-            </div>
-            <p class="text-slate-500 text-sm">© 2025 Core Business Global. All rights reserved.</p>
-        </div>
-    </footer>
+    </div>
 
     <script>
-        // 初始化 Lucide 圖示
-        lucide.createIcons();
+        let scene, camera, renderer, player, carGroup, carWheels = [], playerHead, clock, ground, sky;
+        let obstacles = [], gifts = [], decors = [], items = [], ramps = []; 
+        let smokeParticles = [];
+        let lastCaneZ = 0;
+        let score = 0, health = 100, gameActive = false, isCountingDown = false;
+        let speed = 0;
+        let baseSpeed = 1.0; 
+        let shakeAmount = 0; 
+        let speedTimer;
+        let isBoosted = false; 
+        window.hasSubmitted = false;
+
+        const TRACK_WIDTH = 28; 
+        const skyColors = [
+            new THREE.Color(0x87ceeb), 
+            new THREE.Color(0xffffff), 
+            new THREE.Color(0x050505)  
+        ];
+        
+        let targetX = 0, playerVelocityY = 0, isJumping = false;
+        const keys = { left: false, right: false };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = skyColors[0].clone(); 
+            scene.fog = new THREE.Fog(scene.background, 10, 300);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1500);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            clock = new THREE.Clock();
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+            sun.position.set(20, 50, 10);
+            scene.add(sun);
+
+            createDynamicSky();
+
+            const planeGeo = new THREE.PlaneGeometry(800, 20000);
+            const planeMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            ground = new THREE.Mesh(planeGeo, planeMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.z = -5000; 
+            scene.add(ground);
+
+            createPlayerCar();
+            
+            for(let i=0; i<20; i++) { 
+                if (Math.random() < 0.45) {
+                    const x = THREE.MathUtils.randFloat(-TRACK_WIDTH, TRACK_WIDTH);
+                    const z = -i * 15 - 50;
+                    if (!checkOverlap(x, z, 5)) createTree(x, z); 
+                }
+            }
+            
+            updateCameraPosition();
+            window.addEventListener('resize', onWindowResize);
+            setupControls();
+            animate();
+        }
+
+        function createPlayerCar() {
+            player = new THREE.Group();
+            carGroup = new THREE.Group(); 
+            
+            // 車身主體
+            const carBody = new THREE.Mesh(
+                new THREE.BoxGeometry(2.4, 0.8, 5), 
+                new THREE.MeshPhongMaterial({ color: 0xe63946 })
+            );
+            carBody.position.y = 0.7;
+            carGroup.add(carBody);
+
+            // 駕駛艙
+            const cabin = new THREE.Mesh(
+                new THREE.BoxGeometry(1.6, 0.6, 2),
+                new THREE.MeshPhongMaterial({ color: 0x333333, transparent: true, opacity: 0.7 })
+            );
+            cabin.position.set(0, 1.3, 0.2);
+            carGroup.add(cabin);
+
+            // 尾翼
+            const spoiler = new THREE.Group();
+            const spoilerPlate = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.1, 0.8), new THREE.MeshPhongMaterial({ color: 0xaa0000 }));
+            const leftStand = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.2), new THREE.MeshPhongMaterial({ color: 0x555555 }));
+            const rightStand = leftStand.clone();
+            leftStand.position.set(-0.8, -0.25, 0);
+            rightStand.position.set(0.8, -0.25, 0);
+            spoiler.add(spoilerPlate, leftStand, rightStand);
+            spoiler.position.set(0, 1.4, 2.2);
+            carGroup.add(spoiler);
+
+            // 車輪
+            const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
+            const wheelMat = new THREE.MeshPhongMaterial({ color: 0x111111 });
+            const wheelPositions = [
+                {x: -1.3, y: 0.5, z: 1.6}, {x: 1.3, y: 0.5, z: 1.6},
+                {x: -1.3, y: 0.5, z: -1.6}, {x: 1.3, y: 0.5, z: -1.6}
+            ];
+            
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+                wheel.rotation.z = Math.PI / 2;
+                wheel.position.set(pos.x, pos.y, pos.z);
+                carGroup.add(wheel);
+                carWheels.push(wheel);
+            });
+
+            // 聖誕老人駕駛員
+            playerHead = new THREE.Group();
+            const face = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), new THREE.MeshPhongMaterial({ color: 0xffdbac }));
+            const hat = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 16), new THREE.MeshPhongMaterial({ color: 0xff0000 }));
+            hat.position.y = 0.5;
+            playerHead.add(face, hat);
+            playerHead.position.set(0, 1.4, 0.3);
+            carGroup.add(playerHead);
+
+            player.add(carGroup);
+            scene.add(player);
+        }
+
+        function checkOverlap(x, z, minDistance) {
+            const allObjects = [...obstacles, ...gifts, ...items, ...ramps];
+            for (let obj of allObjects) {
+                const dx = obj.position.x - x;
+                const dz = obj.position.z - z;
+                if (Math.sqrt(dx * dx + dz * dz) < minDistance) return true;
+            }
+            return false;
+        }
+
+        function createDynamicSky() {
+            const skyGeo = new THREE.SphereGeometry(1000, 32, 32);
+            const skyMat = new THREE.MeshBasicMaterial({ color: skyColors[0], side: THREE.BackSide, transparent: true, opacity: 1 });
+            sky = new THREE.Mesh(skyGeo, skyMat);
+            scene.add(sky);
+        }
+
+        function createHeart(x, z) {
+            const heartShape = new THREE.Shape();
+            heartShape.moveTo( 5, 5 );
+            heartShape.bezierCurveTo( 5, 5, 4, 0, 0, 0 );
+            heartShape.bezierCurveTo( -6, 0, -6, 7,-6, 7 );
+            heartShape.bezierCurveTo( -6, 11, -3, 15.4, 5, 19 );
+            heartShape.bezierCurveTo( 12, 15.4, 16, 11, 16, 7 );
+            heartShape.bezierCurveTo( 16, 7, 16, 0, 10, 0 );
+            heartShape.bezierCurveTo( 7, 0, 5, 5, 5, 5 );
+            const extrudeSettings = { depth: 2, bevelEnabled: true, bevelSegments: 2, steps: 2, bevelSize: 1, bevelThickness: 1 };
+            const geometry = new THREE.ExtrudeGeometry(heartShape, extrudeSettings);
+            const material = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.scale.set(0.12, 0.12, 0.12);
+            mesh.rotation.x = Math.PI; 
+            mesh.position.set(x, 2.5, z);
+            scene.add(mesh);
+            items.push(mesh);
+        }
+
+        function createCandyCane(x, z) {
+            const group = new THREE.Group();
+            const curve = new THREE.CurvePath();
+            const line = new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 8, 0));
+            const arc = new THREE.ArcCurve(1.5, 8, 1.5, Math.PI, 0, true);
+            const arcPoints = arc.getPoints(12).map(p => new THREE.Vector3(p.x, p.y, 0));
+            const arcCurve = new THREE.CatmullRomCurve3(arcPoints);
+            curve.add(line);
+            curve.add(arcCurve);
+            const tubeGeo = new THREE.TubeGeometry(curve, 30, 0.6, 8, false);
+            const colors = [];
+            for (let i = 0; i < tubeGeo.attributes.position.count; i++) {
+                const y = tubeGeo.attributes.position.getY(i);
+                if (Math.floor(y * 1.2) % 2 === 0) colors.push(1, 1, 1); else colors.push(1, 0, 0);
+            }
+            tubeGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            const tubeMat = new THREE.MeshPhongMaterial({ vertexColors: true });
+            const mesh = new THREE.Mesh(tubeGeo, tubeMat);
+            if (x > 0) mesh.rotation.y = Math.PI; 
+            group.add(mesh);
+            group.scale.setScalar(1.5);
+            group.position.set(x, 0, z);
+            scene.add(group);
+            decors.push(group);
+            return group;
+        }
+
+        function createTree(x, z) {
+            const group = new THREE.Group();
+            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 2.5), new THREE.MeshPhongMaterial({ color: 0x4b3621 }));
+            trunk.position.y = 1.25; group.add(trunk);
+            for(let i=0; i<3; i++) {
+                const leaf = new THREE.Mesh(new THREE.ConeGeometry(2.5 - i*0.7, 3.5, 8), new THREE.MeshPhongMaterial({ color: 0x054d00 }));
+                leaf.position.y = 2.5 + i*2.0; group.add(leaf);
+            }
+            group.position.set(x, 0, z); scene.add(group); obstacles.push(group);
+        }
+
+        function createGift(x, z, isGold) {
+            const group = new THREE.Group();
+            const box = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), new THREE.MeshPhongMaterial({ color: isGold ? 0xffd700 : 0xffffff }));
+            group.add(box);
+            const ribbonColor = 0xe63946;
+            const rV = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.65, 1.65), new THREE.MeshPhongMaterial({ color: ribbonColor }));
+            const rH = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.65, 0.35), new THREE.MeshPhongMaterial({ color: ribbonColor }));
+            group.add(rV, rH);
+            group.position.set(x, 0.8, z); group.userData = { isGold }; group.scale.set(1.8, 1.8, 1.8);
+            scene.add(group); gifts.push(group);
+        }
+
+        function createRamp(x, z) {
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(8, 0.5, 12), new THREE.MeshPhongMaterial({ color: 0x8b4513 }));
+            mesh.rotation.x = Math.PI / 8; mesh.position.set(x, 1.5, z);
+            scene.add(mesh); ramps.push(mesh);
+        }
+
+        function createSmokeParticle() {
+            const size = THREE.MathUtils.randFloat(0.4, 1.0);
+            const geo = new THREE.SphereGeometry(size, 8, 8);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.6 });
+            const p = new THREE.Mesh(geo, mat);
+            // 粒子從賽車後方噴出
+            p.position.set(player.position.x + THREE.MathUtils.randFloat(-0.8, 0.8), 0.5, player.position.z + 2.5);
+            p.userData = { life: 1.0, vx: THREE.MathUtils.randFloat(-0.08, 0.08), vz: THREE.MathUtils.randFloat(0.1, 0.4) };
+            scene.add(p);
+            smokeParticles.push(p);
+        }
+
+        function updateUI() {
+            document.getElementById('score').innerText = score;
+            const h = document.getElementById('health-display');
+            h.innerText = `❤️ × ${Math.ceil(health / 10)}`;
+            if (health <= 50) h.classList.add('low-health'); else h.classList.remove('low-health');
+        }
+
+        function updateSkyColor() {
+            const dist = Math.abs(player.position.z);
+            const cycleLength = 3000; 
+            const phase = (dist % (cycleLength * skyColors.length)) / cycleLength;
+            const idx1 = Math.floor(phase);
+            const idx2 = (idx1 + 1) % skyColors.length;
+            const factor = phase - idx1;
+            
+            const targetColor = skyColors[idx1].clone().lerp(skyColors[idx2], factor);
+            scene.background.copy(targetColor);
+            scene.fog.color.copy(targetColor);
+            if (sky) sky.material.color.copy(targetColor);
+        }
+
+        function spawnLoop() {
+            if (!gameActive) return;
+            const sz = player.position.z - 300;
+            const rx = () => THREE.MathUtils.randFloat(-TRACK_WIDTH, TRACK_WIDTH);
+
+            if (Math.random() < 0.45) {
+                const x = rx(); if (!checkOverlap(x, sz, 6)) createTree(x, sz);
+            }
+            if (Math.random() < 0.08) {
+                const x = THREE.MathUtils.randFloat(-15, 15); if (!checkOverlap(x, sz, 8)) createRamp(x, sz);
+            }
+            if (Math.random() < 0.35) {
+                const x = rx(); if (!checkOverlap(x, sz, 5)) createGift(x, sz, Math.random() > 0.92);
+            }
+            if (Math.random() < 0.06) {
+                const x = rx(); if (!checkOverlap(x, sz, 5)) createHeart(x, sz);
+            }
+            if (Math.abs(sz - lastCaneZ) > 40) {
+                createCandyCane(-TRACK_WIDTH - 8, sz);
+                createCandyCane(TRACK_WIDTH + 8, sz);
+                lastCaneZ = sz;
+            }
+
+            let nextSpawn = Math.max(10, 150 / speed); 
+            setTimeout(spawnLoop, nextSpawn);
+        }
+
+        function startSpeedTimer() {
+            if (speedTimer) clearInterval(speedTimer);
+            speedTimer = setInterval(() => {
+                if (gameActive) {
+                    const MAX_SPEED = 3.5; // 賽車速度上限稍微提高
+                    if (baseSpeed < MAX_SPEED) {
+                        baseSpeed = Math.min(MAX_SPEED, baseSpeed + 0.15);
+                    }
+                    if (!isBoosted && speed < baseSpeed) {
+                        speed = baseSpeed;
+                    }
+                }
+            }, 2000);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (gameActive || isCountingDown) {
+                if (gameActive) {
+                    if (isJumping) { 
+                        playerVelocityY -= 0.025; 
+                        player.position.y += playerVelocityY; 
+                        if (player.position.y <= 0) { player.position.y = 0; isJumping = false; } 
+                    }
+                    ramps.forEach(ramp => { 
+                        if (Math.abs(player.position.x - ramp.position.x) < 4.5 && Math.abs(player.position.z - ramp.position.z) < 6 && !isJumping) { 
+                            isJumping = true; playerVelocityY = 0.75; 
+                        } 
+                    });
+                    
+                    if (keys.left) { 
+                        targetX -= 1.1; 
+                        carGroup.rotation.z = THREE.MathUtils.lerp(carGroup.rotation.z, 0.25, 0.15); 
+                        carGroup.rotation.y = THREE.MathUtils.lerp(carGroup.rotation.y, 0.1, 0.1); 
+                    }
+                    else if (keys.right) { 
+                        targetX += 1.1; 
+                        carGroup.rotation.z = THREE.MathUtils.lerp(carGroup.rotation.z, -0.25, 0.15); 
+                        carGroup.rotation.y = THREE.MathUtils.lerp(carGroup.rotation.y, -0.1, 0.1); 
+                    }
+                    else {
+                        carGroup.rotation.z = THREE.MathUtils.lerp(carGroup.rotation.z, 0, 0.1);
+                        carGroup.rotation.y = THREE.MathUtils.lerp(carGroup.rotation.y, 0, 0.1);
+                    }
+
+                    targetX = Math.max(-TRACK_WIDTH, Math.min(TRACK_WIDTH, targetX));
+                    
+                    if (!isBoosted && speed > baseSpeed) {
+                        speed -= 0.015; 
+                        if (speed < baseSpeed) speed = baseSpeed;
+                    }
+
+                    player.position.z -= speed;
+                    player.position.x = THREE.MathUtils.lerp(player.position.x, targetX, 0.1);
+                    
+                    // 車輪旋轉
+                    carWheels.forEach(w => {
+                        w.rotation.x -= speed * 0.8;
+                    });
+
+                    updateSkyColor();
+                    createSmokeParticle();
+                    if (speed > 1.8) createSmokeParticle();
+                } else if (isCountingDown) {
+                    shakeAmount = 0.1; 
+                    createSmokeParticle(); 
+                    if (Math.random() > 0.5) createSmokeParticle();
+                }
+
+                ground.position.z = player.position.z - 5000;
+                updateCameraPosition();
+                if (sky) sky.position.copy(player.position);
+                updateUI();
+
+                for (let i = smokeParticles.length - 1; i >= 0; i--) {
+                    const p = smokeParticles[i];
+                    p.userData.life -= 0.025; 
+                    p.scale.setScalar(p.userData.life);
+                    p.material.opacity = p.userData.life * 0.6;
+                    p.position.x += p.userData.vx;
+                    p.position.z += p.userData.vz;
+                    p.position.y += 0.06;
+                    if (p.userData.life <= 0) {
+                        scene.remove(p);
+                        smokeParticles.splice(i, 1);
+                    }
+                }
+
+                if (gameActive) {
+                    obstacles.forEach((o, i) => { 
+                        if (o.position.distanceTo(player.position) < 3.0) { 
+                            health -= 15; 
+                            scene.remove(o); 
+                            obstacles.splice(i, 1); 
+                            shakeAmount = 1.0; 
+                            if (health <= 0) gameOver(); 
+                        } 
+                    });
+                    gifts.forEach((g, i) => { 
+                        g.rotation.y += 0.06; 
+                        if (g.position.distanceTo(player.position) < 4.5) { 
+                            score += g.userData.isGold ? 50 : 10; 
+                            scene.remove(g); 
+                            gifts.splice(i, 1); 
+                        } 
+                    });
+                    items.forEach((it, i) => { 
+                        it.rotation.y += 0.12; 
+                        if (it.position.distanceTo(player.position) < 5.0) { 
+                            health = Math.min(100, health + 10); 
+                            scene.remove(it); 
+                            items.splice(i, 1); 
+                        } 
+                    });
+                }
+                
+                if (gameActive && shakeAmount > 0) shakeAmount *= 0.88;
+            }
+            renderer.render(scene, camera);
+        }
+
+        function updateCameraPosition() {
+            let offsetShakeX = (Math.random() - 0.5) * shakeAmount * 2.5;
+            let offsetShakeY = (Math.random() - 0.5) * shakeAmount * 2.5;
+            
+            camera.position.set(
+                player.position.x * 0.35 + offsetShakeX, 
+                9 + player.position.y * 0.3 + offsetShakeY, 
+                player.position.z + 18
+            );
+            camera.lookAt(player.position.x, 2, player.position.z - 45);
+        }
+
+        function setupControls() {
+            const ctrl = (s, st) => { keys[s] = st; document.getElementById(`btn-${s}`).classList.toggle('active', st); };
+            document.addEventListener('keydown', e => { if(e.key === 'ArrowLeft') ctrl('left', true); if(e.key === 'ArrowRight') ctrl('right', true); });
+            document.addEventListener('keyup', e => { if(e.key === 'ArrowLeft') ctrl('left', false); if(e.key === 'ArrowRight') ctrl('right', false); });
+            const bl = document.getElementById('btn-left'), br = document.getElementById('btn-right');
+            bl.onmousedown = bl.ontouchstart = (e) => { e.preventDefault(); ctrl('left', true); };
+            bl.onmouseup = bl.ontouchend = () => ctrl('left', false);
+            br.onmousedown = br.ontouchstart = (e) => { e.preventDefault(); ctrl('right', true); };
+            br.onmouseup = br.ontouchend = () => ctrl('right', false);
+        }
+
+        function startCountdown() {
+            document.getElementById('start-screen').style.display = 'none';
+            const cd = document.getElementById('countdown'); cd.style.display = 'block';
+            
+            for (let z = -40; z > -300; z -= 50) {
+                createCandyCane(-TRACK_WIDTH - 8, z);
+                createCandyCane(TRACK_WIDTH + 8, z);
+            }
+            lastCaneZ = -290;
+            
+            isCountingDown = true; 
+            let c = 3; 
+            cd.innerText = c;
+            
+            const t = setInterval(() => { 
+                c--; 
+                if (c > 0) cd.innerText = c; 
+                else if (c === 0) {
+                    cd.innerText = "GO!";
+                } else { 
+                    clearInterval(t); 
+                    cd.style.display = 'none'; 
+                    isCountingDown = false; 
+                    gameActive = true; 
+                    
+                    isBoosted = true;
+                    speed = 2.5; 
+                    shakeAmount = 0.5; 
+                    
+                    setTimeout(() => {
+                        isBoosted = false; 
+                    }, 1500);
+
+                    spawnLoop(); 
+                    startSpeedTimer();
+                } 
+            }, 1000);
+        }
+
+        function gameOver() { 
+            gameActive = false; 
+            if (speedTimer) clearInterval(speedTimer);
+            window.currentFinalScore = score;
+            window.hasSubmitted = false; 
+            document.getElementById('final-score-display').innerText = score;
+            document.getElementById('game-over').style.display = 'flex'; 
+        }
+
+        async function handleRestart() {
+            if (!window.hasSubmitted) {
+                await window.submitScore();
+            }
+            location.reload();
+        }
+
+        function onWindowResize() { 
+            camera.aspect = window.innerWidth / window.innerHeight; 
+            camera.updateProjectionMatrix(); 
+            renderer.setSize(window.innerWidth, window.innerHeight); 
+        }
+        window.onload = init;
     </script>
 </body>
 </html>
