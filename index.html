@@ -26,10 +26,8 @@
                 db = getFirestore(app);
                 appId = typeof __app_id !== 'undefined' ? __app_id : 'christmas-dash-v1';
                 
-                // 線上模式：初始化 Auth
                 initAuth();
                 
-                // 線上模式：監聽 Auth 狀態並抓取排行榜
                 onAuthStateChanged(auth, (user) => {
                     window.currentUser = user;
                     if (user) {
@@ -42,7 +40,6 @@
         } catch (e) {
             console.log("切換至離線模式 (使用 LocalStorage)", e);
             isOfflineMode = true;
-            // 離線模式直接抓取排行榜
             fetchLeaderboard();
         }
 
@@ -61,22 +58,17 @@
             }
         }
 
-        // --- 排行榜功能 (支援線上與離線) ---
+        // --- 排行榜功能 ---
 
         function fetchLeaderboard() {
             if (isOfflineMode) {
-                // [離線模式] 從 LocalStorage 讀取
                 try {
                     const localData = JSON.parse(localStorage.getItem('christmas_scores') || '[]');
-                    // 排序並取前 5 名
                     localData.sort((a, b) => b.score - a.score);
                     window.leaderboardData = localData.slice(0, 5);
                     renderLeaderboardUI();
-                } catch (e) {
-                    console.error("Local storage error", e);
-                }
+                } catch (e) { console.error(e); }
             } else {
-                // [線上模式] 從 Firebase 讀取
                 if (!window.currentUser || !db) return;
                 const lbRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
                 onSnapshot(lbRef, (snapshot) => {
@@ -101,26 +93,15 @@
             const area = document.getElementById('score-submit-area');
 
             if (isOfflineMode) {
-                // [離線模式] 存入 LocalStorage
                 try {
                     const localData = JSON.parse(localStorage.getItem('christmas_scores') || '[]');
-                    localData.push({
-                        name: name,
-                        score: score,
-                        timestamp: Date.now()
-                    });
+                    localData.push({ name: name, score: score, timestamp: Date.now() });
                     localStorage.setItem('christmas_scores', JSON.stringify(localData));
-                    
-                    if (area) area.innerHTML = `<p class="text-green-400 font-bold text-lg animate-bounce">✅ 本機分數已儲存：${name}</p>`;
-                    // 更新排行榜顯示
+                    if (area) area.innerHTML = `<p class="text-green-400 font-bold text-lg animate-bounce">✅ 本機分數已儲存</p>`;
                     fetchLeaderboard();
-                    // 模擬一點延遲讓使用者看到訊息
                     await new Promise(r => setTimeout(r, 500));
-                } catch (e) {
-                    console.error("Local save failed", e);
-                }
+                } catch (e) { console.error(e); }
             } else {
-                // [線上模式] 存入 Firebase
                 if (!window.currentUser || !db) return;
                 try {
                     const lbRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
@@ -130,7 +111,7 @@
                         timestamp: Date.now(),
                         uid: window.currentUser.uid
                     });
-                    if (area) area.innerHTML = `<p class="text-green-400 font-bold text-lg animate-bounce">✅ 線上分數已記錄：${name}</p>`;
+                    if (area) area.innerHTML = `<p class="text-green-400 font-bold text-lg animate-bounce">✅ 線上分數已記錄</p>`;
                 } catch (e) {
                     console.error("Submit failed", e);
                     window.hasSubmitted = false;
@@ -142,7 +123,6 @@
             const container = document.getElementById('leaderboard-list');
             if (!container) return;
             
-            // 標題顯示目前模式
             const title = isOfflineMode ? "🏆 本機排行榜 (Offline)" : "🏆 全球排行榜 (Online)";
             const header = document.querySelector('#start-screen h3');
             if(header) header.innerText = title;
@@ -175,7 +155,6 @@
         .btn { background: #e63946; color: white; padding: 12px 30px; border-radius: 50px; font-size: 1.2rem; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; }
         .btn:hover { background: #f1faee; color: #e63946; transform: scale(1.05); }
         .controls { position: absolute; bottom: 40px; width: 100%; display: flex; justify-content: space-between; padding: 0 40px; pointer-events: none; z-index: 50; }
-        /* 將按鈕尺寸從 75px 改為 150px，字體從 2rem 改為 4rem */
         .control-btn { width: 150px; height: 150px; background: rgba(255, 255, 255, 0.2); border: 2px solid rgba(255, 255, 255, 0.4); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 4rem; color: white; pointer-events: auto; user-select: none; }
         .control-btn.active { background: rgba(230, 57, 70, 0.8); transform: scale(0.9); }
         input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 12px 15px; border-radius: 12px; outline: none; transition: all 0.3s; width: 100%; text-align: center; }
@@ -238,7 +217,7 @@
         let speed = 0;
         let baseSpeed = 1.0; 
         let shakeAmount = 0; 
-        let speedTimer;
+        let speedTimer, spawnTimeoutId;
         let isBoosted = false; 
         window.hasSubmitted = false;
 
@@ -280,13 +259,8 @@
 
             createPlayerCar();
             
-            for(let i=0; i<20; i++) { 
-                if (Math.random() < 0.45) {
-                    const x = THREE.MathUtils.randFloat(-TRACK_WIDTH, TRACK_WIDTH);
-                    const z = -i * 15 - 50;
-                    if (!checkOverlap(x, z, 5)) createTree(x, z); 
-                }
-            }
+            // 生成初始賽道
+            generateInitialTrack();
             
             updateCameraPosition();
             window.addEventListener('resize', onWindowResize);
@@ -294,15 +268,24 @@
             animate();
         }
 
+        function generateInitialTrack() {
+            for(let i=0; i<20; i++) { 
+                if (Math.random() < 0.45) {
+                    const x = THREE.MathUtils.randFloat(-TRACK_WIDTH, TRACK_WIDTH);
+                    const z = -i * 15 - 50;
+                    if (!checkOverlap(x, z, 5)) createTree(x, z); 
+                }
+            }
+        }
+
         function createPlayerCar() {
             player = new THREE.Group();
             carGroup = new THREE.Group();
 
-            // 定義麋鹿的顏色材質
-            const furColor = 0x8B4513; // 棕色毛皮
-            const noseColor = 0xFF0000; // 紅鼻子
-            const antlerColor = 0xD2B48C; // 鹿角顏色
-            const hoofColor = 0x111111; // 蹄子顏色
+            const furColor = 0x8B4513; 
+            const noseColor = 0xFF0000; 
+            const antlerColor = 0xD2B48C; 
+            const hoofColor = 0x111111; 
 
             const furMat = new THREE.MeshPhongMaterial({ color: furColor, flatShading: true });
             const noseMat = new THREE.MeshPhongMaterial({ color: noseColor, shininess: 100 });
@@ -310,93 +293,38 @@
             const hoofMat = new THREE.MeshPhongMaterial({ color: hoofColor });
             const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-            // 1. 身體
+            // Body
             const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.4, 2.8), furMat);
-            body.position.y = 1.4;
-            carGroup.add(body);
+            body.position.y = 1.4; carGroup.add(body);
 
-            // 2. 四條腿
+            // Legs
             const legGeo = new THREE.BoxGeometry(0.4, 1.2, 0.4);
-            const positions = [
-                {x:-0.5, z:0.9}, {x:0.5, z:0.9},
-                {x:-0.5, z:-0.9}, {x:0.5, z:-0.9}
-            ];
-            positions.forEach(p => {
-                const leg = new THREE.Mesh(legGeo, furMat);
-                leg.position.set(p.x, 0.6, p.z);
-                carGroup.add(leg);
-                
-                const hoof = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.44), hoofMat);
-                hoof.position.set(p.x, 0.15, p.z);
-                carGroup.add(hoof);
+            [{x:-0.5, z:0.9}, {x:0.5, z:0.9}, {x:-0.5, z:-0.9}, {x:0.5, z:-0.9}].forEach(p => {
+                const leg = new THREE.Mesh(legGeo, furMat); leg.position.set(p.x, 0.6, p.z); carGroup.add(leg);
+                const hoof = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.44), hoofMat); hoof.position.set(p.x, 0.15, p.z); carGroup.add(hoof);
             });
 
-            // 3. 尾巴
-            const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), furMat);
-            tail.position.set(0, 1.8, 1.5);
-            carGroup.add(tail);
-
-            // 4. 脖子
-            const neck = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.8), furMat);
-            neck.position.set(0, 2.2, -1.1);
-            neck.rotation.x = -0.3;
-            carGroup.add(neck);
-
-            // 5. 頭部群組
-            const headGroup = new THREE.Group();
-            headGroup.position.set(0, 2.9, -1.6);
-            
-            // 頭型
-            const headMesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.9, 1.4), furMat);
-            headGroup.add(headMesh);
-
-            // 紅鼻子
-            const nose = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), noseMat);
-            nose.position.set(0, 0, -0.7);
-            headGroup.add(nose);
-
-            // 眼睛
+            // Tail & Neck & Head
+            const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), furMat); tail.position.set(0, 1.8, 1.5); carGroup.add(tail);
+            const neck = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.8), furMat); neck.position.set(0, 2.2, -1.1); neck.rotation.x = -0.3; carGroup.add(neck);
+            const headGroup = new THREE.Group(); headGroup.position.set(0, 2.9, -1.6);
+            headGroup.add(new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.9, 1.4), furMat));
+            const nose = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), noseMat); nose.position.set(0, 0, -0.7); headGroup.add(nose);
             const eyeGeo = new THREE.SphereGeometry(0.12, 8, 8);
-            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-            leftEye.position.set(-0.3, 0.1, -0.65);
-            headGroup.add(leftEye);
-            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-            rightEye.position.set(0.3, 0.1, -0.65);
-            headGroup.add(rightEye);
+            const leftEye = new THREE.Mesh(eyeGeo, eyeMat); leftEye.position.set(-0.3, 0.1, -0.65); headGroup.add(leftEye);
+            const rightEye = new THREE.Mesh(eyeGeo, eyeMat); rightEye.position.set(0.3, 0.1, -0.65); headGroup.add(rightEye);
 
-            // 鹿角
-            const antlerStemGeo = new THREE.BoxGeometry(0.15, 0.8, 0.15);
-            const antlerBranchGeo = new THREE.BoxGeometry(0.6, 0.15, 0.15);
-            
-            const leftAntler = new THREE.Group();
-            leftAntler.position.set(-0.3, 0.5, -0.2);
-            leftAntler.rotation.z = 0.5;
-            leftAntler.add(new THREE.Mesh(antlerStemGeo, antlerMat));
-            const laBranch = new THREE.Mesh(antlerBranchGeo, antlerMat);
-            laBranch.position.y = 0.3;
-            leftAntler.add(laBranch);
-            headGroup.add(leftAntler);
+            // Antlers
+            const antlerStemGeo = new THREE.BoxGeometry(0.15, 0.8, 0.15); const antlerBranchGeo = new THREE.BoxGeometry(0.6, 0.15, 0.15);
+            const la = new THREE.Group(); la.position.set(-0.3, 0.5, -0.2); la.rotation.z = 0.5; la.add(new THREE.Mesh(antlerStemGeo, antlerMat));
+            const lab = new THREE.Mesh(antlerBranchGeo, antlerMat); lab.position.y = 0.3; la.add(lab); headGroup.add(la);
+            const ra = new THREE.Group(); ra.position.set(0.3, 0.5, -0.2); ra.rotation.z = -0.5; ra.add(new THREE.Mesh(antlerStemGeo, antlerMat));
+            const rab = new THREE.Mesh(antlerBranchGeo, antlerMat); rab.position.y = 0.3; ra.add(rab); headGroup.add(ra);
 
-            const rightAntler = new THREE.Group();
-            rightAntler.position.set(0.3, 0.5, -0.2);
-            rightAntler.rotation.z = -0.5;
-            rightAntler.add(new THREE.Mesh(antlerStemGeo, antlerMat));
-            const raBranch = new THREE.Mesh(antlerBranchGeo, antlerMat);
-            raBranch.position.y = 0.3;
-            rightAntler.add(raBranch);
-            headGroup.add(rightAntler);
-
-            // --- 聖誕帽 (Santa Hat) 回歸！ ---
-            const hatGeo = new THREE.ConeGeometry(0.4, 1.0, 16);
-            const hatMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
-            const hat = new THREE.Mesh(hatGeo, hatMat);
-            hat.rotation.x = -0.2;
-            hat.position.set(0, 0.8, 0.2);
-            headGroup.add(hat);
-            
-            const pom = new THREE.Mesh(new THREE.SphereGeometry(0.15), new THREE.MeshBasicMaterial({color:0xffffff}));
-            pom.position.set(0, 1.3, 0);
-            headGroup.add(pom);
+            // Hat
+            const hatGeo = new THREE.ConeGeometry(0.4, 1.0, 16); const hatMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            const hat = new THREE.Mesh(hatGeo, hatMat); hat.rotation.x = -0.2; hat.position.set(0, 0.8, 0.2); headGroup.add(hat);
+            const pom = new THREE.Mesh(new THREE.SphereGeometry(0.15), new THREE.MeshBasicMaterial({color:0xffffff})); pom.position.set(0, 1.3, 0); headGroup.add(pom);
 
             carGroup.add(headGroup);
             player.add(carGroup);
@@ -435,21 +363,16 @@
             const material = new THREE.MeshPhongMaterial({ color: 0xff0000 });
             const mesh = new THREE.Mesh(geometry, material);
             mesh.scale.set(0.12, 0.12, 0.12);
-            mesh.rotation.x = Math.PI; 
-            mesh.position.set(x, 2.5, z);
-            scene.add(mesh);
-            items.push(mesh);
+            mesh.rotation.x = Math.PI; mesh.position.set(x, 2.5, z); scene.add(mesh); items.push(mesh);
         }
 
         function createCandyCane(x, z) {
             const group = new THREE.Group();
             const curve = new THREE.CurvePath();
-            const line = new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 8, 0));
+            curve.add(new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 8, 0)));
             const arc = new THREE.ArcCurve(1.5, 8, 1.5, Math.PI, 0, true);
             const arcPoints = arc.getPoints(12).map(p => new THREE.Vector3(p.x, p.y, 0));
-            const arcCurve = new THREE.CatmullRomCurve3(arcPoints);
-            curve.add(line);
-            curve.add(arcCurve);
+            curve.add(new THREE.CatmullRomCurve3(arcPoints));
             const tubeGeo = new THREE.TubeGeometry(curve, 30, 0.6, 8, false);
             const colors = [];
             for (let i = 0; i < tubeGeo.attributes.position.count; i++) {
@@ -457,14 +380,9 @@
                 if (Math.floor(y * 1.2) % 2 === 0) colors.push(1, 1, 1); else colors.push(1, 0, 0);
             }
             tubeGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-            const tubeMat = new THREE.MeshPhongMaterial({ vertexColors: true });
-            const mesh = new THREE.Mesh(tubeGeo, tubeMat);
+            const mesh = new THREE.Mesh(tubeGeo, new THREE.MeshPhongMaterial({ vertexColors: true }));
             if (x > 0) mesh.rotation.y = Math.PI; 
-            group.add(mesh);
-            group.scale.setScalar(1.5);
-            group.position.set(x, 0, z);
-            scene.add(group);
-            decors.push(group);
+            group.add(mesh); group.scale.setScalar(1.5); group.position.set(x, 0, z); scene.add(group); decors.push(group);
             return group;
         }
 
@@ -493,19 +411,15 @@
 
         function createRamp(x, z) {
             const mesh = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.4, 9.6), new THREE.MeshPhongMaterial({ color: 0x8b4513 }));
-            mesh.rotation.x = Math.PI / 8; mesh.position.set(x, 1.2, z); 
-            scene.add(mesh); ramps.push(mesh);
+            mesh.rotation.x = Math.PI / 8; mesh.position.set(x, 1.2, z); scene.add(mesh); ramps.push(mesh);
         }
 
         function createSmokeParticle() {
             const size = THREE.MathUtils.randFloat(0.4, 1.0);
-            const geo = new THREE.SphereGeometry(size, 8, 8);
-            const mat = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.6 });
-            const p = new THREE.Mesh(geo, mat);
+            const p = new THREE.Mesh(new THREE.SphereGeometry(size, 8, 8), new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.6 }));
             p.position.set(player.position.x + THREE.MathUtils.randFloat(-0.8, 0.8), 0.5, player.position.z + 2.5);
             p.userData = { life: 1.0, vx: THREE.MathUtils.randFloat(-0.08, 0.08), vz: THREE.MathUtils.randFloat(0.1, 0.4) };
-            scene.add(p);
-            smokeParticles.push(p);
+            scene.add(p); smokeParticles.push(p);
         }
 
         function updateUI() {
@@ -521,8 +435,7 @@
             const phase = (dist % (cycleLength * skyColors.length)) / cycleLength;
             const idx1 = Math.floor(phase);
             const idx2 = (idx1 + 1) % skyColors.length;
-            const factor = phase - idx1;
-            const targetColor = skyColors[idx1].clone().lerp(skyColors[idx2], factor);
+            const targetColor = skyColors[idx1].clone().lerp(skyColors[idx2], phase - idx1);
             scene.background.copy(targetColor);
             scene.fog.color.copy(targetColor);
             if (sky) sky.material.color.copy(targetColor);
@@ -550,7 +463,7 @@
                 lastCaneZ = sz;
             }
             let nextSpawn = Math.max(10, 150 / speed); 
-            setTimeout(spawnLoop, nextSpawn);
+            spawnTimeoutId = setTimeout(spawnLoop, nextSpawn);
         }
 
         function startSpeedTimer() {
@@ -691,33 +604,62 @@
         function gameOver() { 
             gameActive = false; 
             if (speedTimer) clearInterval(speedTimer);
+            if (spawnTimeoutId) clearTimeout(spawnTimeoutId);
             window.currentFinalScore = score;
             window.hasSubmitted = false; 
             document.getElementById('final-score-display').innerText = score;
             document.getElementById('game-over').style.display = 'flex'; 
         }
 
+        // --- 核心修改：軟重置 (不刷新網頁) ---
+        function resetGame() {
+            score = 0;
+            health = 100;
+            speed = 0;
+            baseSpeed = 1.0;
+            gameActive = false;
+            isBoosted = false;
+            window.hasSubmitted = false;
+            if (spawnTimeoutId) clearTimeout(spawnTimeoutId);
+
+            player.position.set(0, 0, 0);
+            carGroup.rotation.set(0, 0, 0);
+            targetX = 0;
+            lastCaneZ = 0;
+
+            [obstacles, gifts, items, ramps, smokeParticles, decors].forEach(arr => {
+                arr.forEach(obj => scene.remove(obj));
+                arr.length = 0;
+            });
+
+            generateInitialTrack();
+
+            const btn = document.getElementById('restart-btn');
+            if (btn) {
+                btn.innerText = "重新挑戰";
+                btn.disabled = false;
+            }
+            document.getElementById('game-over').style.display = 'none';
+            updateUI();
+        }
+
         window.handleRestart = async function() {
             const btn = document.getElementById('restart-btn');
-            if (btn) btn.innerText = "儲存分數中...";
-            
-            // 建立一個超時 Promise，2秒後自動當作完成，避免卡死
-            const timeoutPromise = new Promise(resolve => setTimeout(resolve, 2000));
+            if (btn) {
+                btn.innerText = "儲存中...";
+                btn.disabled = true;
+            }
             
             try {
                 if (!window.hasSubmitted) {
-                    // 使用 Promise.race，看誰先完成 (提交分數 vs 2秒倒數)
+                    const timeoutPromise = new Promise(resolve => setTimeout(resolve, 2000));
                     await Promise.race([window.submitScore(), timeoutPromise]);
                 }
-            } catch (e) {
-                console.error("Save failed but forcing reload", e);
-            } finally {
-                // 再次確保
-                if (isOfflineMode) {
-                   await new Promise(r => setTimeout(r, 500));
-                }
-                location.reload();
-            }
+            } catch (e) { console.error(e); }
+            
+            // 直接呼叫軟重置，不刷新頁面
+            resetGame();
+            startCountdown();
         };
 
         function onWindowResize() { 
